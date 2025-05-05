@@ -58,7 +58,7 @@ for i in range(256):
           "Key: ", key_guesses[i],
           " Plaintext: ", plaintexts[i].hex())
 
-# Generate a line graph of Hamming weights
+# Generate a line graph of Hamming weights 
 plt.figure(figsize=(10, 6))
 plt.plot(range(256), hypo_power, linestyle='-', color='b', label='Hamming Weight')
 plt.title('Hamming Weights vs Iteration')
