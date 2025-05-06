@@ -8,8 +8,9 @@ random.seed(0)  # For reproducibility
 plaintexts = []
 for _ in range(1000):
     plaintext = ''.join(f"{random.randint(0, 255):02x}" for _ in range(16))  # 16 bytes = 128 bits
-    for i in range(20):
-        plaintexts.append(plaintext)
+    
+    #for i in range(20):
+    plaintexts.append(plaintext)
     
 
 # Save plaintexts to a .txt file
