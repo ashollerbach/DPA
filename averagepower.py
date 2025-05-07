@@ -37,8 +37,8 @@ sigma = np.std(average_ch1)
 ch1_standardized = (average_ch1 - mu) / sigma
 
 #set limit to improve visibility
-limit = 1000
-range = 1000
+limit = 1600
+range = 2500
 time = time[limit:limit + range]
 ch1_standardized = ch1_standardized[limit :limit + range]
 # Plot TIME vs. standardized average CH1
