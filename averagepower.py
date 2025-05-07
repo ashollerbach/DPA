@@ -38,7 +38,7 @@ ch1_standardized = (average_ch1 - mu) / sigma
 
 #set limit to improve visibility
 limit = 1600
-range = 2500
+range = 3500
 time = time[limit:limit + range]
 ch1_standardized = ch1_standardized[limit :limit + range]
 # Plot TIME vs. standardized average CH1
