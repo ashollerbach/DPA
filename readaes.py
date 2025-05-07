@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Read CSV data
-data = pd.read_csv('aes_ch1_20250506132504400.csv', skiprows=12)  # Skip metadata rows
+data = pd.read_csv('0a4d6f8107274375cf0a549995fe79f0/aes_ch1_20250506174808975.csv', skiprows=12)  # Skip metadata rows
 
 # Remove the first row
 data = data.iloc[1:]
@@ -24,6 +24,10 @@ if not np.issubdtype(ch1.dtype, np.number):
 mu = np.mean(ch1)
 sigma = np.std(ch1)
 ch1_standardized = (ch1 - mu) / sigma
+
+limit = 1000
+ch1_standardized = ch1_standardized[:1000]
+time = time[:1000]
 
 
 # Plot TIME vs. standardized CH1

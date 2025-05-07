@@ -5,7 +5,7 @@ import glob
 import os
 
 # Specify folder path containing CSV files
-folder_path = 'dummy_run'  # Replace with your folder path
+folder_path = '0a4d6f8107274375cf0a549995fe79f0'  # Replace with your folder path
 
 # Initialize lists to store data
 all_ch1 = []
