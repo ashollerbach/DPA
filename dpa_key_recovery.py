@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import glob
+import os
 
 # AES forward S-box lookup table
 sbox = [
@@ -25,7 +27,63 @@ def hamming_weight(n):
     """Calculate Hamming weight of a byte."""
     return bin(n).count('1')
 
+def load_and_normalize_traces(trails_path, plaintexts, limit=1600, trace_range=3500):
+    """Load, average, and normalize power traces from subfolders."""
+    traces_list = []
+    time = None
+
+    # Iterate through plaintexts to match subfolders
+    for plaintext in plaintexts:
+        # Convert plaintext bytes to hex string for folder name
+        folder_name = plaintext.hex()
+        folder_path = os.path.join(trails_path, folder_name)
+
+        # Read all CSV files in the subfolder
+        csv_files = glob.glob(os.path.join(folder_path, '*.csv'))
+        if not csv_files:
+            raise ValueError(f"No CSV files found in {folder_path}")
+
+        # Load and average traces for this plaintext
+        ch1_list = []
+        for file in csv_files:
+            data = pd.read_csv(file, skiprows=12)
+            data = data.iloc[1:]  # Remove first row
+            if time is None:
+                time = pd.to_numeric(data['Labels'], errors='coerce').dropna()
+            ch1 = pd.to_numeric(data['Unnamed: 1'], errors='coerce').dropna()
+            ch1_list.append(ch1)
+
+        # Compute average waveform
+        ch1_df = pd.DataFrame(ch1_list)
+        average_ch1 = ch1_df.mean(axis=0)
+
+        # Standardize average waveform
+        mu = np.mean(average_ch1)
+        sigma = np.std(average_ch1)
+        if sigma == 0:
+            raise ValueError(f"Zero standard deviation for plaintext {folder_name}")
+        ch1_normalized = (average_ch1 - mu) / sigma
+
+        # Store normalized average
+        traces_list.append(ch1_normalized)
+
+    # Convert to NumPy array and slice
+    traces = np.array(traces_list)
+    time = time[limit:limit + trace_range]
+    traces = traces[:, limit:limit + trace_range]
+
+    # Verify data
+    if traces.shape[0] == 0 or traces.shape[1] == 0:
+        raise ValueError("Empty traces after slicing")
+    if len(time) != traces.shape[1]:
+        raise ValueError("Time and traces length mismatch")
+    if traces.shape[0] != len(plaintexts):
+        raise ValueError("Number of traces does not match number of plaintexts")
+
+    return time, traces
+
 def dpa_attack(plaintexts, traces):
+    """Perform DPA attack to recover AES-128 key."""
     num_traces, trace_length = traces.shape
     num_bytes = 16  # AES-128 has 16 key bytes
     recovered_key = []
@@ -44,9 +102,9 @@ def dpa_attack(plaintexts, traces):
         best_key = 0
         for key_guess in range(256):
             for sample in range(trace_length):
-                corr = np.abs(np.corrcoef(hypo_power[key_guess], traces[:, sample])[0, 1])
-                if not np.isnan(corr) and corr > max_corr:
-                    max_corr = corr
+                corr = np.corrcoef(hypo_power[key_guess], traces[:, sample])[0, 1]
+                if not np.isnan(corr) and abs(corr) > max_corr:
+                    max_corr = abs(corr)
                     best_key = key_guess
 
         recovered_key.append(best_key)
@@ -54,10 +112,15 @@ def dpa_attack(plaintexts, traces):
 
     return bytes(recovered_key)
 
-# Example usage (replace with your data)
-# Assume plaintexts: [num_traces, 16] array of bytes
-# Assume traces: [num_traces, trace_length] array of power samples
-# plaintexts = np.random.randint(0, 256, (200, 16), dtype=np.uint8)
-# traces = np.random.rand(200, 1000)  # Example trace data
-# key = dpa_attack(plaintexts, traces)
-# print(f"Recovered key: {[hex(b) for b in key]}")
+# Example usage
+trails_path = 'trails'  # Replace with your path
+plaintext_file = 'plaintexts.txt'  # Replace with your plaintext file
+
+# Load plaintexts (32-char hex strings, one per line)
+plaintexts = np.array([bytes.fromhex(line.strip()) for line in open(plaintext_file)])
+# Load and normalize averaged traces
+time, traces = load_and_normalize_traces(trails_path, plaintexts, limit=1600, trace_range=3500)
+
+# Run DPA attack
+key = dpa_attack(plaintexts, traces)
+print(f"Recovered key: {[hex(b) for b in key]}")

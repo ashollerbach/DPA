@@ -5,7 +5,7 @@ import glob
 import os
 
 # Specify folder path containing CSV files
-folder_path = '0a4d6f8107274375cf0a549995fe79f0'  # Replace with your folder path
+folder_path = 'trails/0a08b63e0bce357032480812e7e37d0e'  # Replace with your folder path
 
 # Initialize lists to store data
 all_ch1 = []
