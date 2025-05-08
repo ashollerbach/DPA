@@ -1,9 +1,12 @@
+# dpa_key_recovery.py
 import numpy as np
 import pandas as pd
 import glob
 import os
+import matplotlib.pyplot as plt
 
-# AES forward S-box lookup table
+# AES forward S-box lookup table (kept in case it's needed for other DPA related functions,
+# but not directly used in the plotting function requested)
 sbox = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
@@ -27,100 +30,235 @@ def hamming_weight(n):
     """Calculate Hamming weight of a byte."""
     return bin(n).count('1')
 
-def load_and_normalize_traces(trails_path, plaintexts, limit=1600, trace_range=3500):
-    """Load, average, and normalize power traces from subfolders."""
-    traces_list = []
-    time = None
+def plot_average_traces_from_folders(trails_path, output_filename='combined_power_analysis_plots.png', limit=1600, trace_range=3500):
+    """
+    Processes power traces from subfolders, creating two side-by-side subplots:
+    1. Overlayed standardized average power traces.
+    2. Vertically stacked dot plot of standardized maximum values from each trace's 
+       specified range, colored by trace, with jitter for visibility.
 
-    # Iterate through plaintexts to match subfolders
-    for plaintext in plaintexts:
-        # Convert plaintext bytes to hex string for folder name
-        folder_name = plaintext.hex()
-        folder_path = os.path.join(trails_path, folder_name)
+    Args:
+        trails_path (str): Path to the main directory containing subfolders of traces.
+        output_filename (str): Name of the file to save the combined plot.
+        limit (int): Number of initial samples to skip in each trace.
+        trace_range (int): Number of samples to include in the plot after the limit.
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(22, 7)) 
+    
+    master_time_vector = None 
+    # Stores (folder_name, max_value_of_standardized_trace_segment, color_of_trace_on_ax1)
+    max_values_data = [] 
 
-        # Read all CSV files in the subfolder
+    subfolders = [f.path for f in os.scandir(trails_path) if f.is_dir()]
+
+    if not subfolders:
+        print(f"No subfolders found in {trails_path}. Cannot generate plots.")
+        plt.close(fig) 
+        return
+
+    print(f"Found subfolders: {[os.path.basename(sf) for sf in subfolders]}")
+
+    for folder_path in subfolders:
+        folder_name = os.path.basename(folder_path)
+        print(f"\nProcessing folder: {folder_name}")
+
         csv_files = glob.glob(os.path.join(folder_path, '*.csv'))
         if not csv_files:
-            raise ValueError(f"No CSV files found in {folder_path}")
+            print(f"  No CSV files found in {folder_path}. Skipping this folder.")
+            continue
+        
+        print(f"  Found {len(csv_files)} CSV files.")
+        all_ch1_for_folder = []
+        current_folder_time_vector = None
 
-        # Load and average traces for this plaintext
-        ch1_list = []
-        for file in csv_files:
-            data = pd.read_csv(file, skiprows=12)
-            data = data.iloc[1:]  # Remove first row
-            if time is None:
-                time = pd.to_numeric(data['Labels'], errors='coerce').dropna()
-            ch1 = pd.to_numeric(data['Unnamed: 1'], errors='coerce').dropna()
-            ch1_list.append(ch1)
+        for i, file_path in enumerate(csv_files):
+            try:
+                data = pd.read_csv(file_path, skiprows=12)
+                if data.empty: continue
+                data = data.iloc[1:] 
+                if data.empty: continue
+                if 'Labels' not in data.columns or 'Unnamed: 1' not in data.columns: continue
+                
+                time_col = pd.to_numeric(data['Labels'], errors='coerce')
+                ch1_col = pd.to_numeric(data['Unnamed: 1'], errors='coerce')
+                valid_indices = time_col.notna() & ch1_col.notna()
+                time_col = time_col[valid_indices]
+                ch1_col = ch1_col[valid_indices]
+                if ch1_col.empty: continue
 
-        # Compute average waveform
-        ch1_df = pd.DataFrame(ch1_list)
-        average_ch1 = ch1_df.mean(axis=0)
+                if current_folder_time_vector is None:
+                    current_folder_time_vector = time_col
+                
+                if len(ch1_col) != len(current_folder_time_vector):
+                    min_len = min(len(ch1_col), len(current_folder_time_vector))
+                    ch1_col = ch1_col.iloc[:min_len]
+                    if i == 0: 
+                        current_folder_time_vector = current_folder_time_vector.iloc[:min_len]
+                all_ch1_for_folder.append(ch1_col)
+            except Exception as e:
+                print(f"  Error processing file {os.path.basename(file_path)}: {e}")
+                continue
+        
+        if not all_ch1_for_folder: continue
+        try:
+            min_len_this_folder = min(len(trace) for trace in all_ch1_for_folder)
+        except ValueError: continue
+        all_ch1_aligned = [trace.iloc[:min_len_this_folder].values for trace in all_ch1_for_folder]
+        
+        if current_folder_time_vector is not None:
+             current_folder_time_vector = current_folder_time_vector.iloc[:min_len_this_folder]
+        else: 
+            print(f"  Could not establish a time vector for folder {folder_name}. Skipping.")
+            continue
+        if not all_ch1_aligned: 
+            print(f"  No traces could be aligned for folder {folder_name}. Skipping.")
+            continue
 
-        # Standardize average waveform
+        average_ch1 = np.mean(np.vstack(all_ch1_aligned), axis=0)
+        if average_ch1.size == 0: 
+            print(f"  Average CH1 is empty for folder {folder_name}. Skipping.")
+            continue
+
         mu = np.mean(average_ch1)
         sigma = np.std(average_ch1)
-        if sigma == 0:
-            raise ValueError(f"Zero standard deviation for plaintext {folder_name}")
-        ch1_normalized = (average_ch1 - mu) / sigma
+        ch1_standardized = (average_ch1 - mu) / sigma if sigma != 0 else average_ch1 - mu
+        
+        if len(current_folder_time_vector) < limit + trace_range or len(ch1_standardized) < limit + trace_range:
+            print(f"  Folder {folder_name} has insufficient data points ({len(ch1_standardized)}) for the specified limit ({limit}) and range ({trace_range}). Skipping.")
+            continue
 
-        # Store normalized average
-        traces_list.append(ch1_normalized)
+        time_to_plot = current_folder_time_vector.iloc[limit : limit + trace_range]
+        trace_to_plot = ch1_standardized[limit : limit + trace_range]
+        if time_to_plot.empty or trace_to_plot.size == 0: 
+            print(f"  Trace for {folder_name} is empty after slicing. Skipping.")
+            continue
+            
+        folder_color_for_ax1 = None 
+        if master_time_vector is None: 
+            master_time_vector = time_to_plot.values 
+        
+        if len(time_to_plot.values) == len(master_time_vector) and np.allclose(time_to_plot.values, master_time_vector):
+            line, = ax1.plot(master_time_vector, trace_to_plot, label=f'{folder_name}') 
+            folder_color_for_ax1 = line.get_color() 
+            print(f"  Plotted trace for {folder_name} with color {folder_color_for_ax1}.")
+            if trace_to_plot.size > 0: 
+                max_values_data.append((folder_name, np.max(trace_to_plot), folder_color_for_ax1))
+        else:
+            print(f"  Warning: Time axis for {folder_name} mismatch. Skipping for trace overlay plot.")
+            # Only add to max_values_data if it was plotted on ax1 to ensure color consistency for ax2.
 
-    # Convert to NumPy array and slice
-    traces = np.array(traces_list)
-    time = time[limit:limit + trace_range]
-    traces = traces[:, limit:limit + trace_range]
+    # --- Configure and finalize the first subplot (Overlayed Traces) ---
+    if not ax1.lines: 
+        ax1.text(0.5, 0.5, 'No trace data plotted.', horizontalalignment='center', verticalalignment='center', transform=ax1.transAxes)
+        print("\nNo traces were plotted on the first subplot.")
+    else:
+        ax1.set_xlabel('Time (s)')
+        ax1.set_ylabel('Standardized Current (z-score)')
+        ax1.set_title(f'Overlayed Standardized Average Power Traces\n(Samples {limit}-{limit+trace_range-1})')
+        ax1.grid(True)
+        ax1.legend(loc='best', fontsize='small')
 
-    # Verify data
-    if traces.shape[0] == 0 or traces.shape[1] == 0:
-        raise ValueError("Empty traces after slicing")
-    if len(time) != traces.shape[1]:
-        raise ValueError("Time and traces length mismatch")
-    if traces.shape[0] != len(plaintexts):
-        raise ValueError("Number of traces does not match number of plaintexts")
+    # --- Create and configure the second subplot (Vertically Stacked Colored Dots for Max Values) ---
+    if not max_values_data:
+        ax2.text(0.5, 0.5, 'No max value data to plot.', horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes)
+        print("\nNo data available to plot standardized maximum values as dots.")
+    else:
+        folder_names_for_dot_plot = [item[0] for item in max_values_data]
+        raw_max_vals = np.array([item[1] for item in max_values_data])
+        colors_for_dot_plot = [item[2] for item in max_values_data]
 
-    return time, traces
+        mu_max_vals = np.mean(raw_max_vals)
+        sigma_max_vals = np.std(raw_max_vals)
+        
+        if sigma_max_vals == 0:
+            print("\nWarning: Standard deviation of collected max values is zero. Plotting centered max values.")
+            standardized_max_vals_to_plot = raw_max_vals - mu_max_vals
+            y_label_max_plot = 'Centered Max Power Value in Range'
+        else:
+            standardized_max_vals_to_plot = (raw_max_vals - mu_max_vals) / sigma_max_vals
+            y_label_max_plot = 'Standardized Max Power Value in Range (z-score)'
 
-def dpa_attack(plaintexts, traces):
-    """Perform DPA attack to recover AES-128 key."""
-    num_traces, trace_length = traces.shape
-    num_bytes = 16  # AES-128 has 16 key bytes
-    recovered_key = []
+        # Create the dot plot on ax2
+        # Jitter for x-coordinates to prevent perfect overlap
+        jitter_strength = 0.05 # Adjust for more/less spread
+        x_coords_for_dots = np.random.normal(loc=0, scale=jitter_strength, size=len(folder_names_for_dot_plot))
 
-    for byte_idx in range(num_bytes):
-        # Hypothetical power consumption for each key guess
-        hypo_power = np.zeros((256, num_traces), dtype=np.uint8)
-        for key_guess in range(256):
-            for t in range(num_traces):
-                # Compute S-box output for plaintext XOR key_guess
-                intermediate = sbox[plaintexts[t, byte_idx] ^ key_guess]
-                hypo_power[key_guess, t] = hamming_weight(intermediate)
+        for i, folder_name in enumerate(folder_names_for_dot_plot):
+            ax2.scatter(x_coords_for_dots[i], # X-coordinate with jitter around 0
+                        standardized_max_vals_to_plot[i], # Y-coordinate is the standardized max value
+                        color=colors_for_dot_plot[i], 
+                        s=100, # Size of the dots
+                        label=folder_name, 
+                        alpha=0.7, 
+                        edgecolors='k') # Edge color for dots
+        
+        ax2.set_xticks([]) # Remove x-axis ticks as they are not meaningful here
+        ax2.set_xlabel('Color-Coded Traces') # More generic x-axis label
+        ax2.set_ylabel(y_label_max_plot)
+        ax2.set_title(f'Standardized Max Power Values per Trace\n(Samples {limit}-{limit+trace_range-1})')
+        ax2.grid(axis='y', linestyle='--')
+        ax2.legend(title='Folder/Trace', loc='best', fontsize='small', markerscale=0.7)
 
-        # Compute correlation between hypothetical and measured power
-        max_corr = 0
-        best_key = 0
-        for key_guess in range(256):
-            for sample in range(trace_length):
-                corr = np.corrcoef(hypo_power[key_guess], traces[:, sample])[0, 1]
-                if not np.isnan(corr) and abs(corr) > max_corr:
-                    max_corr = abs(corr)
-                    best_key = key_guess
+    # --- Finalize and save/show the combined plot ---
+    fig.suptitle('Power Trace Analysis', fontsize=16, y=1.02) 
+    plt.tight_layout(rect=[0, 0, 1, 0.98]) 
+    
+    try:
+        plt.savefig(output_filename)
+        print(f"\nCombined plot saved to {output_filename}")
+    except Exception as e:
+        print(f"\nError saving combined plot: {e}")
+    plt.show()
 
-        recovered_key.append(best_key)
-        print(f"Byte {byte_idx}: Key guess {hex(best_key)} (Correlation: {max_corr:.4f})")
+# --- Main execution block ---
+if __name__ == "__main__":
+    trails_main_path = 'trails' 
+    plot_limit = 1600 
+    plot_trace_range = 125 
+    combined_plot_file = 'combined_power_analysis_plots.png'
 
-    return bytes(recovered_key)
+    dummy_data_created_this_run = False
+    if not os.path.exists(trails_main_path):
+        print(f"'{trails_main_path}' not found. Creating dummy data for testing...")
+        os.makedirs(trails_main_path, exist_ok=True)
+        num_dummy_folders = 4 
+        traces_per_dummy_folder = 3
+        num_dummy_samples = 6000 
+        base_time_dummy = np.linspace(0, num_dummy_samples / 100000.0, num_dummy_samples) 
 
-# Example usage
-trails_path = 'trails'  # Replace with your path
-plaintext_file = 'plaintexts.txt'  # Replace with your plaintext file
+        for i in range(num_dummy_folders):
+            dummy_folder_name = f"dummy_plaintext_{i:02x}" 
+            subfolder_path = os.path.join(trails_main_path, dummy_folder_name)
+            os.makedirs(subfolder_path, exist_ok=True)
+            for j in range(traces_per_dummy_folder):
+                csv_path = os.path.join(subfolder_path, f"trace_{j}.csv")
+                with open(csv_path, 'w') as f:
+                    for k in range(12): f.write(f"Metadata line {k+1}\n")
+                    f.write("Header,Labels,Unnamed: 1,OtherColumn\n") 
+                    f.write("This,is,a,dummyrow\n") 
+                    
+                    noise = np.random.randn(num_dummy_samples) * (0.5 + i*0.1) 
+                    signal_amplitude = 5 + i*2 
+                    signal = signal_amplitude * np.sin(2 * np.pi * (i + 1) * base_time_dummy / (num_dummy_samples/100)) + (j * 0.2) 
+                    trace_data = signal + noise
+                    for k_sample in range(num_dummy_samples):
+                        f.write(f"Sample{k_sample},{base_time_dummy[k_sample]:.6f},{trace_data[k_sample]:.6f},0\n")
+        print(f"Dummy data created in '{trails_main_path}'.")
+        dummy_data_created_this_run = True
 
-# Load plaintexts (32-char hex strings, one per line)
-plaintexts = np.array([bytes.fromhex(line.strip()) for line in open(plaintext_file)])
-# Load and normalize averaged traces
-time, traces = load_and_normalize_traces(trails_path, plaintexts, limit=1600, trace_range=3500)
+    if dummy_data_created_this_run:
+        print("Using adjusted plot parameters for dummy data.")
+        plot_limit = 100
+        if num_dummy_samples - plot_limit < plot_trace_range :
+             plot_trace_range = max(50, num_dummy_samples - plot_limit - 1) 
+        print(f"Adjusted dummy data: plot_limit={plot_limit}, plot_trace_range={plot_trace_range}")
 
-# Run DPA attack
-key = dpa_attack(plaintexts, traces)
-print(f"Recovered key: {[hex(b) for b in key]}")
+    print(f"\nStarting trace plotting from: {os.path.abspath(trails_main_path)}")
+    print(f"Plotting samples from {plot_limit} to {plot_limit + plot_trace_range - 1}")
+    plot_average_traces_from_folders(
+        trails_main_path, 
+        output_filename=combined_plot_file,
+        limit=plot_limit, 
+        trace_range=plot_trace_range
+    )
+    print("\nScript finished.")
