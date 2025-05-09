@@ -4,8 +4,7 @@ import numpy as np
 import glob
 import os
 
-# Specify folder path containing CSV files
-folder_path = 'trails/0a08b63e0bce357032480812e7e37d0e'  # Replace with your folder path
+folder_path = 'trails/0a08b63e0bce357032480812e7e37d0e' 
 
 # Initialize lists to store data
 all_ch1 = []
